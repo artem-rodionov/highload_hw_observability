@@ -1,0 +1,75 @@
+services:
+  crud:
+    build: ./observability_java
+    ports:
+      - "8080:8080"
+    environment:
+      - POD_NAME=just_pod
+      - DATACENTER=spb
+      - DEPLOYMENT_NAME=0.1
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost:8080/actuator/health" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoriametrics
+    ports:
+      - "8428:8428"
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+    command:
+      - "--httpListenAddr=:8428"
+      - "--promscrape.config=/etc/prometheus/prometheus.yaml"
+    restart: unless-stopped
+    depends_on:
+      crud:
+        condition: service_healthy
+        restart: true
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+    restart: unless-stopped
+
+  dashboard-generator:
+      build: ./dashboard_generator
+      environment:
+        - GRAFANA_URL=http://grafana:3000
+        - GRAFANA_ADMIN_USER=admin
+        - GRAFANA_ADMIN_PASSWORD=admin
+        - CRUD_URL=http://crud:8080
+      depends_on:
+        grafana:
+          condition: service_healthy
+        crud:
+          condition: service_healthy
+      restart: "no"
+
+  k6:
+    image: grafana/k6:latest
+    volumes:
+      - ./load/load.js:/load/load.js
+    command: run /load/load.js
+    depends_on:
+      crud:
+        condition: service_healthy
